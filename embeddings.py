@@ -1,5 +1,5 @@
 from collections import defaultdict
-from transformers import pipeline
+from sentence_transformers import SentenceTransformer
 import json
 from dataclasses import dataclass
 import torch
@@ -7,14 +7,14 @@ import pickle
 import os
 import logging
 import time
-# Configure logging
-logging.basicConfig(level=logging.INFO,  # Set the logging level
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')  # Define log message format
+
+logging.basicConfig(level=logging.INFO,  
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s') 
 logger = logging.getLogger(__name__)
 
 
 device = torch.device('mps')
-extractor = pipeline('feature-extraction', model="BAAI/bge-large-en-v1.5", device=device, truncation=True)
+model = SentenceTransformer('BAAI/bge-large-en-v1.5', device=device)
 
 @dataclass
 class Paper:
@@ -40,7 +40,6 @@ class Paper:
 with open('kaggle_data/data_subset.json', encoding='latin-1') as f:
     papers = json.load(f)
 
-# all_papers = []
 years_to_paper = defaultdict(list)
 for paper in papers:
     curr_paper = Paper(id=paper['id'], title=paper['title'], abstract=paper['abstract'],
@@ -48,24 +47,15 @@ for paper in papers:
     years_to_paper[curr_paper.year].append(curr_paper)
 
 
-def process_batch(papers, extractor):
-    embeddings = extractor(papers)
-    return {papers[i]: embeddings[i] for i in range(len(embeddings))}
-
-batch = 64
-
 curr_time = time.time()
 for year in years_to_paper.keys():
     logger.info(f"Processing year {year}")
     papers_per_year = years_to_paper[year]
 
-    i = 0
     per_year_embeddings = {}
-    while i < len(papers_per_year):
-        papers = [str(val) for val in papers_per_year[i:min(i+batch, len(papers_per_year))]]
-        per_year_embeddings.update(process_batch(papers, extractor))
-        logger.info(f"Year {year}: Batch {i}:{i+64} processed")
-        i+=batch
+
+    embeddings = model.encode(sentences=[str(val) for val in papers_per_year], batch_size=64, show_progress_bar=True, convert_to_numpy=True, device=device)
+    res = {papers[i]['id']: embeddings[i] for i in range(len(embeddings))}
 
     base_dir = f"embeddings/{year}"
     if not os.path.exists(base_dir):
@@ -73,6 +63,6 @@ for year in years_to_paper.keys():
 
     logger.info(f"Saving embeddings {year} in {base_dir}/data.pkl")
     with open(base_dir + "/data.pkl", "wb") as f:
-        pickle.dump(per_year_embeddings, f)
+        pickle.dump(res, f)
 
 logger.info(f"Total time to process: {time.time() - curr_time}")
